@@ -1,0 +1,391 @@
+Deeprimer library structure:
+
+HOME -
+1. bin # contains all the functional scripts
+
+2. data - 
+	
+	
+	a. BED # contains bed files
+	
+	b. Primers # contains primers files
+	
+	c. Uprimers # contains U-converted primer files
+
+	d. HG19 # hg19 reference genome folder
+
+	e. Mappability # the ucsc whole genome mappability, and the light version
+
+ 	f. Meta_files # files containing information across all batches of experiment
+
+	g. Coverage -
+		
+		1. Processed # Per batch processed data stores here
+		2. Raw # Per batch raw coverage analysis data stores here
+
+3. Machine_input # The formatted trainning data are placed here
+
+4. Trained_OBJ # The trained objects/machines (SVM, RF, pLR) are stored here
+
+5. TF_sessions # tensorflow uses different mechanism to store the trained machine
+	
+	- CNN # stores trained machine for CNN.
+	- FNN # stores trained machine for FNN.
+	- TEMP # stores temporary sessions for tensorflow. Temporary sessions will be generated when you evaluate model.
+
+6. config # set up the evrionment for Deeprimer
+
+7. README (this file)
+
+#################################################################################################################################################
+
+Deeprimer walk through:
+
+(for each script, '-h' option will tell you how to use it; 
+for all the python script: the interpreter is now set as "#!/home/ionadmin/TaoY/src/miniconda2/bin/python"
+You might want it change it back it "#!/bin/bash" when you move around the library)
+
+1. Merge_files.sh : Merge Uprimer files with corresponding coverage analysis summary.
+		    The matching file `IonCode_Uprimer_Bed_matched.txt` resides in the data/Meta_files folder.
+		    The output files are stored in data/Coverage/Processed.
+			
+		    [Example]: Merge_uprimer_coverage.sh 68627 IonCode_Uprimer_Bed_matched.txt
+
+
+2. Merge_barcodes.sh: Combine all uprimer-coverage merged file in the same batch and acquire the insert sequences.
+		      The output file is named All_batch_insert_[batch_id].txt, and placed in data/Coverage/Processed/Batch_[batch_id].
+
+		      [Example]: Merge_barcodes.sh 68627 data/Coverage/Processed/Batch_68627
+
+3. PoolbyPrimer.sh: Pool same primer from the same panel, coverage statistics will be averaged.
+		    The output file is named barcode_pooled_[batch_id].bed, and placed in data/Coverage/Processed/Batch_[batch_id].
+
+		    [Example]: PoolbyPrimer.sh 68627 data/Coverage/Processed/Batch_68627
+
+4. Get_mappability.sh: Extract mappability score for the whole batch.
+		       The output file is named Batch_[batch_id]_mappability.txt, and placed in data/Coverage/Processed/Batch_[batch_id].
+					   
+		       [NOTE]: The whole genome mappability scores are stored in data/Mappability folder. Since the original UCSC file is 
+		       too large (~10G), a light version was generated which only involves the regions that are related to the all shadow pannels. 
+		       It is recommanded to check if you interested region has been covered by the light version. if not, get it from the full
+		       version and add it to the light version.
+
+		      [Example]: Get_mappability.sh 68627 data/Coverage/Processed/Batch_68627
+
+5. context_dep.sh: Compute the context dependency scores (bowtie2 mapping quality and alignment score for whole batch).
+		   The output file is named bypanel_ctxdep_[batch_id].txt, and placed in data/Coverage/Processed/Batch_[batch_id].
+
+		   [NOTE]: This was done by aligning each of the forward and reverse sequences to the all other sequences in the panel
+		   that are likely to interact with it (i.e., reverse complement of other forward and reverse sequences, and both strands of insert). 
+		   Local alignment was performed using bowtie2. The mapping qualities and the alignment scores were extracted as features.
+
+		   [Example]: context_dep.sh 68627 data/Coverage/Processed/Batch_68627
+
+6. Get_raw_input.sh: Combine all feature files (i.e., barcode_pooled_[batch_id].bed, Batch_[batch_id]_mappability.txt, bypanel_ctxdep_[batch_id].txt), 
+		     and calculate outcome variables, including total_e2e, stand bias, normalized_total, normalized_e2e. Normalization was against the panel mean. 
+		     The output file is named Batch_[batch_id]_allcomb.txt, and placed in data/Coverage/Processed/Batch_[batch_id]
+		     [Command]: ./Get_raw_input.sh [outfile_name] [file1] [file2] [...]
+
+		     [Example]: ./Get_raw_input.sh Batch_68627_allcomb.txt barcode_pooled_68627.bed Batch_68627_mappability.txt bypanel_ctxdep_68627.txt
+
+7. extract_class.sh: Extract classes based on coverage statistics.
+	             The coverage statistics include:
+		     'total_reads', 'total_e2e', 'strand_bias', 'norm_tot', 'norm_toe', 'norm_bias'
+
+		     If 'total_reads' is used,
+
+         	     V:0:0-100 means you identify the class based on the valude of total reads, label them 0.
+		     P:0:0-0.1 means you identify the class based on the last 10%, as they were first ranked by total reads.
+
+		     [Example]: ./extract_class.sh total_reads V:0:0-100 Batch_68627_allcomb.txt
+
+
+8. Preprocessing.py: The script has three main functions: 1. compute features with the raw training set; 2. split raw training set and compute features
+		     for each half. This is function is for evaluation purpose; 3. compute features for the prediction file.
+
+		     [Options]: -t  specify the raw training set (i.g., output from extract_class.sh script) 
+		   	        -n  specify the number of Kmers, for each K in 2,4,6,8,10. The primer kmer will be half this number.
+			        -o  when format the predition file, the preprocessed training set object (i.e., pickled file) is specified by this option.
+			        -p  the predction file.
+
+		     [Example]: 1. For model evaluation purpose, split the data into 2-fold, compute the features:
+				  (samples200.txt is an example stored in data/Example, it has the same columns with Batch_[batch_id]_allcomb.txt)
+
+				  Preprocessing.py -t samples200.txt -n 40 -p split-eval
+
+				  [Note]: This will generate a pickled object stored in Trained_OBJ, named samples200_split.eval.pickled.
+				  The object contains 
+				  X_train: training set features 
+				  y_train: training set labels
+				  X_test: test set features
+				  y_test: test labels
+				  X_nam: features names
+				  fit_collection: the fitted objects for rescaling variables
+
+	  		       2. Use all training set to compute features, save fitted object:
+
+                                  Preprocessing.py -t samples200.txt -n 40
+
+                                  [Note]: This will generate a pickled object stored in Trained_OBJ, named samples200_pre.fit.pickled. 
+                                  The object contains:
+                                  X_train: training set features 
+				  y_train: training set labels
+				  X_nam: features names
+				  fit_collection: the fitted objects for rescaling variables
+
+                               3. Compute features for the prediction data according to the fitted training set:
+
+                                  Preprocessing.py -t samples200.txt -n 40 -o samples200_pre.fit.pickled -p pred_sample100.txt
+
+                                  [Note]: This will generate the predition file in the format recognizable by the machine.
+                                  The generated file is stored at Machine_input, named pred_sample100.formatted.
+
+
+9. Run_deeprimer.py: The script has three main functions: perform benchmarking, perform cross-validation, predict with specified machine
+					 
+ 		     [Options]: -M   tell Deeprimer what machine you want to use (for prediction and cross-validation only).
+				-w   specify the task - bm for benchmark, cv for cross-validation, pred for prediction.
+			        -f   tell the machine the number of features you have. This option is effective only when you use FNN or CNN.
+			        -i   number of training iterations for CNN or FNN. It is suggested to use >=10000 iterations.
+			        -d   node dropping probablity CNN and FNN only.
+			        -C   penalty to regularize the model. Effective for pLR and SVM. Suggested value: 1000.
+			        -n   number of estimators for random forest (i.e., number of trees).
+			        -o   specify the preprocessed objects stored in the folder Trained_OBJ.
+			        -p   formated predition file. Effective when you set -w to pred.
+
+		     [Example]: 1. Benchmark classifiers
+
+				   Run_deeprimer.py -w bm -f 415 -i 10000 -d 0.5 -C 1000 -n 1000 -o samples200_split.eval.pickled
+
+				   [Note]: this script will compare the performance of all machines using the pickled object samples200_split.eval.pickled.
+				   The output are ROC curves and PRC curves, stored in Report folder.
+
+				2. Cross-validate user-specified machine (note that the paramter options are different for different machines)
+
+				   Random Forest:
+				   Run_deeprimer.py -w cv -M RF -k 3 -o samples200_pre.fit.pickled
+
+				   CNN:
+				   Run_deeprimer.py -w cv -M CNN -k 3 -o samples200_pre.fit.pickled
+
+				   FNN:
+				   Run_deeprimer.py -w cv -M FNN -k 3 -o samples200_pre.fit.pickled
+
+				   SVM:
+				   Run_deeprimer.py -w cv -M SVM -k 3 -o samples200_pre.fit.pickled
+
+				   pLR:
+				   Run_deeprimer.py -w cv -M pLR -k 3 -o samples200_pre.fit.pickled
+
+				   [Note]: this script will generate ROC and precision recall curve and store them in the Report folder. 
+				   When you enter the commandlines, a message will pop out to ask you to enter the parameters for corresponding machine.
+
+
+				3. Predict with the best performance machine (note that the paramter options are different for different machines)
+
+				   Random Forest:
+				   Run_deeprimer.py -w pred -M RF -n 1000 -o samples200_pre.fit_RF.machine -p pred_sample100.formatted
+ 
+				   CNN:
+				   Run_deeprimer.py -w pred -M CNN -f 415 -d 0.5 -i 1000 -o samples200_pre.fit_CNN.machine.meta -p pred_sample100.formatted
+
+				   FNN:
+				   Run_deeprimer.py -w pred -M FNN -f 415 -d 0.5 -i 1000 -o samples200_pre.fit_CNN.machine.meta -p pred_sample100.formatted
+
+				   SVM:
+				   Run_deeprimer.py -w pred -M SVM -C 1000 -o samples200_pre.fit_RF.machine -p pred_sample100.formatted
+
+				   pLR:
+				   Run_deeprimer.py -w pred -M pLR -C 1000 -o samples200_pre.fit_RF.machine -p pred_sample100.formatted
+
+				   [Note]: Choose the corresponding machine for -o. This will output a classfication file to Report folder. The first column 
+				   of the classification file is the predicted class of each primer, the next few columns are the probability for each class.
+
+
+10. Run_randomforest.py: Random forest machine, it has three functions: fitting, evaluation, predition (3 class and 2 class).
+						
+			 [Options]: -t   number of estimators (number of trees)
+		  		    -w   the task you want to perform - fit for fitting the model, eval for evaluate the model, pred for prediction
+				    -o   trained object or machine stored in Trained_OBJ folder
+				    -p   prediction file in the format of machine input (i.g., pred_sample100.formatted)
+				    -c   number of classes. So far it only support 2 classes and 3 classes. 
+					
+			 [Example]: 1. Fit the model only:
+
+	 			       Run_randomforest.py -t 1000 -w fit -o samples200_pre.fit.pickled
+
+				       [Note]: The output is samples200_pre.fit_RF.machine, stored in Trained_OBJ folder.
+
+			 	    2. Evaluate the model:
+
+				       Run_randomforest.py -t 1000 -w eval -o samples200_split.eval.pickled
+
+				       [Note]: The command outputs three files, ROC, precision-recall curves and the performance metrics file, stored in the Report folder.
+
+  				    3. Make prediction:
+
+				       Run_randomforest.py -t 1000 -w pred -o samples200_pre.fit_RF.machine -p pred_sample100.formatted
+
+				       [Note]: The output is the classification result file, stored in the Report folder.
+
+
+11. Run_CNN.py: Convolution neural network, it has three functions: fitting, evaluation, predition.
+
+		[Options]: -f   number of features
+			   -d   dropping probability
+			   -i   number of iterations
+		     	   -w   the task you want to perform - fit for fitting the model, eval for evaluate the model, pred for prediction
+			   -o   trained object or machine stored in Trained_OBJ folder and TF_sessions folders
+			   -p   prediction file in the format of machine input (i.g., pred_sample100.formatted)
+					
+		[Example]: 1. Fit the model only:
+
+		  	      Run_CNN.py -f 415 -d 0.5 -i 500 -w fit -o samples200_pre.fit.pickled
+
+			      [Note]: The output is samples200_pre.fit_CNN.machine.meta, stored in TF_sessions/CNN folder.
+
+			   2. Evaluate the model:
+
+			      Run_CNN.py -f 415 -d 0.5 -i 500 -w eval -o samples200_split.eval.pickled
+
+			      [Note]: The command outputs three files, ROC, precision-recall curves and the performance metrics file, stored in the Report folder.
+
+		           3. Make prediction:
+
+			      Run_CNN.py -f 415 -w pred -o samples200_pre.fit_CNN.machine.meta -p pred_sample100.formatted
+
+			      [Note]: The output is the classification result file, stored in the Report folder.
+
+12. Run_FNN.py: Convolution neural network, it has three functions: fitting, evaluation, predition.
+
+		[Options]: -f   number of features
+			   -d   dropping probability
+			   -i   number of iterations
+		     	   -w   the task you want to perform - fit for fitting the model, eval for evaluate the model, pred for prediction
+			   -o   trained object or machine stored in Trained_OBJ and TF_sessions folders
+			   -p   prediction file in the format of machine input (i.g., pred_sample100.formatted)
+				
+		[Example]:  1. Fit the model only:
+
+  			       Run_FNN.py -f 415 -d 0.5 -i 500 -w fit -o samples200_pre.fit.pickled
+
+			       [Note]: The output is samples200_pre.fit_CNN.machine.meta, stored in TF_sessions/FNN folder.
+
+			    2. Evaluate the model:
+
+			       Run_FNN.py -f 415 -d 0.5 -i 500 -w eval -o samples200_split.eval.pickled
+
+			       [Note]: The command outputs three files, ROC, precision-recall curves and the performance metrics file, stored in the Report folder.
+
+			    3. Make prediction:
+
+			       Run_FNN.py -f 415 -w pred -o samples200_pre.fit_FNN.machine.meta -p pred_sample100.formatted
+
+			       [Note]: The output is the classification result file, stored in the Report folder.
+
+
+13. Run_pLR.py: Penalized(regularized) logistic regression, it has three functions: fitting, evaluation, predition.
+				
+		[Options]: -C   Penalty. Suggested value: 1000.
+			   -w   the task you want to perform - fit for fitting the model, eval for evaluate the model, pred for prediction
+			   -o   trained object or machine stored in Trained_OBJ folder
+			   -p   prediction file in the format of machine input (i.g., pred_sample100.formatted)
+
+		[Example]: 1. Fit the model only:
+
+		 	      Run_pLR.py -C 1000 -w fit -o samples200_pre.fit.pickled
+
+			      [Note]: The output is samples200_pre.fit_pLR.machine, stored in Trained_OBJ folder.
+
+			   2. Evaluate the model:
+
+			      Run_pLR.py -C 1000 -w eval -o samples200_split.eval.pickled
+
+			      [Note]: The command outputs three files, ROC, precision-recall curves and the performance metrics file, stored in the Report folder.
+
+			   3. Make prediction:
+
+			      Run_pLR.py -C 1000 -w pred -o samples200_pre.fit_pLR.machine -p pred_sample100.formatted
+
+			      [Note]: The output is the classification result file, stored in the Report folder.
+
+
+14. Run_SVM.py: Support vector machine, it has three functions: fitting, evaluation, predition.
+
+		[Options]: -C   Penalty. Suggested value: 1000.
+			   -w   the task you want to perform - fit for fitting the model, eval for evaluate the model, pred for prediction
+			   -o   trained object or machine stored in Trained_OBJ folder
+			   -p   prediction file in the format of machine input (i.g., pred_sample100.formatted)
+
+		[Example]: 1. Fit the model only:
+
+	 		      Run_SVM.py -C 1000 -w fit -o samples200_pre.fit.pickled
+
+			      [Note]: The output is samples200_pre.fit_SVM.machine, stored in Trained_OBJ folder.
+
+			   2. Evaluate the model:
+
+			      Run_SVM.py -C 1000 -w eval -o samples200_split.eval.pickled
+
+			     [Note]: The command outputs three files, ROC, precision-recall curves and the performance metrics file, stored in the Report folder.
+
+			   3. Make prediction:
+
+			      Run_SVM.py -C 1000 -w pred -o samples200_pre.fit_SVM.machine -p pred_sample100.formatted
+
+			      [Note]: The output is the classification result file, stored in the Report folder.
+
+15. Get_importance.py: feature importance analysis. This script will rank the features according to their importances.
+		       It performs unsupervised hierarchical clustering of features based on the correaltion distance between them.
+
+		       [Options]: -t   number of estimators (i.e., number of trees)
+				  -r   to what rank you want to output
+				  -o   the pre-fitted object in the Trained_OBJ folder (i.g., samples200_pre.fit.pickled)
+
+		        [Note]: It outputs three files to Report folder, feature importance ranking plot, feature clusters 
+				and the complete set of feature importance ranking in txt file.
+
+
+16. Kmers_map.py: This script is embedded in Preprocessing.py. It computes and K-mers counts for forward, reverse primers.
+		  and insert.
+
+		  [Options]: -i   input file, need Pandas dataframe format, at least contain the forward, reverse primers and insert sequences
+   			     -k   the k in k-mers {2,4,6,8,10}
+			     -m   top number of kmers to extract (i.e., 40) based on total accurences
+			     -o   output file name. Also in Pandas dataframe format with column names
+
+17. seq_cont.py: This script is embedded in Preprocessing.py. It computes the thermo dynamics and sequence content summaries.
+
+		 [options]: -i   input file, need Panas dataframe format, at least contain the forward, reverse primers and insert sequences
+		            -o   output file name, also in Pandas dataframe format with column names
+
+		 [Note]: the outputs include these columns. The context dependency scores and the mappability scores are directly inherited from input file.
+  
+			'fwdp.len', 'revp.len', 'ins.len', 'fwdp.Acnt', 'fwdp.Ccnt', 'fwdp.GCcnt_3p5', 'fwdp.Gcnt', 'fwdp.Tcnt', 'revp.Acnt',
+ 			 'revp.Ccnt', 'revp.GCcnt_3p5', 'revp.Gcnt', 'revp.Tcnt', 'Ins.GC', 'fwdNumTBlock', 'revNumTBlock', 'pass', 'fwdpvsp_mq', 'fwdpvsp_a1',
+  			'fwdpvsp_a2', 'fwdpvsi_mq', 'fwdpvsi_a1', 'fwdpvsi_a2', 'revpvsp_mq', 'revpvsp_a1', 'revpvsp_a2', 'revpvsi_mq', 'revpvsi_a1', 'revpvsi_a2',
+ 			 'fwdU.gibs.ave', 'fwdU.gibs.max', 'revU.gibs.ave', 'revU.gibs.max', 'fwdp.gibs.3p5.max', 'revp.gibs.3p5.max', 'fwdp.Tm', 'revp.Tm', 'Delta.Tm',
+ 			 'ins.gibs', 'ins.Tm', 'fwdp.mean.map', 'fwd.min.map', 'revp.mean.map', 'revp.min.map', 'ins.mean.map', 'ins.min.map'
+
+
+
+To be finished...
+
+18. Run_RF_regressor_template.py # run random forest regressor, use scikit learn RandomForestRegressor, "from sklearn.ensemble import RandomForestRegressor"
+
+19. Get_raw_pred.py (not created) # format the input data into the format recognizable to Preprocessing.py
+
+20. Update_machines_template.sh # When the training data changes
+
+
+##################################################################################################################
+
+Dependencies
+
+bowtie2 (>= version 2.3.2)
+
+bedtools (>= version 2.25.0)
+
+Tensorflow (>= version 1.3.0)
+
+scikit-learn (>= version 0.19.0)
